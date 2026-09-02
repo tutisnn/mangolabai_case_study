@@ -51,6 +51,17 @@ async def convert(
 
     if amount <= 0:
         return error_response(400, "invalid_amount", "Amount must be greater than zero.")
+    if base == target:
+        return {
+            "amount": float(amount),
+            "from": base,
+            "to": target,
+            "rate": 1.0,
+            "result": float(round(amount, 2)),
+            "rate_date": day,
+            "asked_date": day,
+            "source": SOURCE,
+        }
     if asked_date > date.today():
         return error_response(400, "date_in_future", "Date must not be in the future.")
     if asked_date < SERIES_START:

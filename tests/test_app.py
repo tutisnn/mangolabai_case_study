@@ -27,6 +27,64 @@ def assert_error(response, status_code: int, code: str, message: str):
     assert response.json() == {"error": code, "message": message}
 
 
+def test_same_currency_returns_identity_conversion_without_calling_upstream(monkeypatch):
+    print("\nTEST: same currency returns rate 1 without calling upstream")
+    print("GET /tools/convert?amount=250&from=EUR&to=EUR&date=2026-08-28")
+
+    async def fake_get(self, url, params=None):
+        raise AssertionError("same currency should return before calling upstream")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "EUR", "date": "2026-08-28"},
+    )
+
+    print_response("same_currency_identity", response)
+    assert response.status_code == 200
+    assert response.json() == {
+        "amount": 250.0,
+        "from": "EUR",
+        "to": "EUR",
+        "rate": 1.0,
+        "result": 250.0,
+        "rate_date": "2026-08-28",
+        "asked_date": "2026-08-28",
+        "source": "ECB via frankfurter.dev",
+    }
+
+
+def test_try_to_try_returns_identity_conversion_for_2026_09_01(monkeypatch):
+    print("\nTEST: TRY to TRY returns rate 1 without calling upstream")
+    print("GET /tools/convert?amount=250&from=TRY&to=TRY&date=2026-09-01")
+
+    async def fake_get(self, url, params=None):
+        raise AssertionError("same currency should return before calling upstream")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "TRY", "to": "TRY", "date": "2026-09-01"},
+    )
+
+    print_response("try_to_try_identity", response)
+    assert response.status_code == 200
+    assert response.json() == {
+        "amount": 250.0,
+        "from": "TRY",
+        "to": "TRY",
+        "rate": 1.0,
+        "result": 250.0,
+        "rate_date": "2026-09-01",
+        "asked_date": "2026-09-01",
+        "source": "ECB via frankfurter.dev",
+    }
+
+
 def test_convert_uses_fake_upstream(monkeypatch):
     print("\nTEST: successful conversion uses FX_UPSTREAM_BASE fake upstream")
     calls = []
