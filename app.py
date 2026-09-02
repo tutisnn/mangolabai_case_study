@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
@@ -28,6 +29,11 @@ async def http_exception_handler(request, exc: HTTPException) -> JSONResponse:
     if isinstance(exc.detail, dict) and "error" in exc.detail:
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
     return error_response(exc.status_code, "bad_request", "The request could not be processed.")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError) -> JSONResponse:
+    return error_response(422, "bad_request", "The request could not be processed.")
 
 
 @app.get("/tools/convert")
