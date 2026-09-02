@@ -7,4 +7,5 @@ htmlcov/
 .env
 .env.*
 !.env.example
+PROJECT.md
 node_modules/

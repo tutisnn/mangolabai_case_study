@@ -71,6 +71,37 @@ def test_convert_uses_fake_upstream(monkeypatch):
     assert len(calls) == 1
 
 
+def test_weekend_uses_upstream_rate_date(monkeypatch):
+    print("\nTEST: weekend request shows the actual upstream rate date")
+
+    async def fake_get(self, url, params=None):
+        request = httpx.Request("GET", url, params=params)
+        assert str(request.url).startswith("http://fake-upstream.local/2026-08-30")
+        return httpx.Response(
+            200,
+            json={"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"TRY": 47.1234}},
+            request=request,
+        )
+
+    monkeypatch.setenv("FX_UPSTREAM_BASE", "http://fake-upstream.local")
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "TRY", "date": "2026-08-30"},
+    )
+
+    print("GET /tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-30")
+    print("status:", response.status_code)
+    print("response:", response.json())
+
+    assert response.status_code == 200
+    assert response.json()["asked_date"] == "2026-08-30"
+    assert response.json()["rate_date"] == "2026-08-28"
+    assert response.json()["result"] == 11780.85
+
+
 def test_invalid_amount_returns_error_shape():
     client = TestClient(app)
     response = client.get(
@@ -111,6 +142,36 @@ def test_upstream_http_error_returns_error(monkeypatch):
     )
 
     assert_error(response, 502, "upstream_error", "The exchange-rate service returned an error.")
+
+
+def test_future_date_returns_error_when_upstream_rejects_it(monkeypatch):
+    async def fake_get(self, url, params=None):
+        raise AssertionError("future dates should fail before calling upstream")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "TRY", "date": "2099-01-01"},
+    )
+
+    assert_error(response, 400, "date_in_future", "Date must not be in the future.")
+
+
+def test_date_before_series_start_returns_error_when_upstream_rejects_it(monkeypatch):
+    async def fake_get(self, url, params=None):
+        raise AssertionError("dates before the series starts should fail before calling upstream")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "TRY", "date": "1990-01-01"},
+    )
+
+    assert_error(response, 400, "date_before_series_start", "Date is before the exchange-rate series starts.")
 
 
 def test_upstream_bad_json_returns_error(monkeypatch):

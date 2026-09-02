@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 app = FastAPI(title="fx-convert-tool")
 
 SOURCE = "ECB via frankfurter.dev"
+SERIES_START = date(1999, 1, 4)
 _cache: dict[tuple[str, str, str], dict] = {}
 
 
@@ -50,6 +51,10 @@ async def convert(
 
     if amount <= 0:
         return error_response(400, "invalid_amount", "Amount must be greater than zero.")
+    if asked_date > date.today():
+        return error_response(400, "date_in_future", "Date must not be in the future.")
+    if asked_date < SERIES_START:
+        return error_response(400, "date_before_series_start", "Date is before the exchange-rate series starts.")
 
     if key in _cache:
         payload = _cache[key]
