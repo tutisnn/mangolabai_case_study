@@ -27,6 +27,25 @@ def assert_error(response, status_code: int, code: str, message: str):
     assert response.json() == {"error": code, "message": message}
 
 
+def test_unknown_currency_code_returns_error(monkeypatch):
+    print("\nTEST: unknown currency code returns structured error")
+    print("GET /tools/convert?amount=250&from=EUR&to=TRE&date=2026-08-28")
+
+    async def fake_get(self, url, params=None):
+        raise AssertionError("unknown currencies should fail before calling upstream")
+
+    monkeypatch.setenv("FX_UPSTREAM_BASE", "http://fake-upstream.local")
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "TRE", "date": "2026-08-28"},
+    )
+
+    assert_error(response, 400, "unknown_currency", "One or both requested currency codes are not supported.")
+
+
 def test_same_currency_returns_identity_conversion_without_calling_upstream(monkeypatch):
     print("\nTEST: same currency returns rate 1 without calling upstream")
     print("GET /tools/convert?amount=250&from=EUR&to=EUR&date=2026-08-28")
