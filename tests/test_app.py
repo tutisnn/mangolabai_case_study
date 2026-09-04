@@ -148,6 +148,76 @@ def test_convert_uses_fake_upstream(monkeypatch):
     assert len(calls) == 1
 
 
+def test_successful_conversion_is_cached(monkeypatch):
+    print("\nTEST: repeated successful conversion does not call upstream twice")
+    print("GET /tools/convert?amount=250&from=EUR&to=USD&date=2026-08-28")
+
+    calls = []
+
+    async def fake_get(self, url, params=None):
+        request = httpx.Request("GET", url, params=params)
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"USD": 1.2}},
+            request=request,
+        )
+
+    monkeypatch.setenv("FX_UPSTREAM_BASE", "http://fake-upstream.local")
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    first = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "USD", "date": "2026-08-28"},
+    )
+    second = client.get(
+        "/tools/convert",
+        params={"amount": "100", "from": "EUR", "to": "USD", "date": "2026-08-28"},
+    )
+
+    print_response("first_successful_conversion", first)
+    print_response("second_successful_conversion_from_cache", second)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["result"] == 300.0
+    assert second.json()["result"] == 120.0
+    assert len(calls) == 1
+
+
+def test_failed_upstream_payload_is_not_cached(monkeypatch):
+    print("\nTEST: failed upstream payload is not cached")
+    print("GET /tools/convert?amount=250&from=EUR&to=GBP&date=2026-08-28")
+
+    responses = [
+        {"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {}},
+        {"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"GBP": 0.85}},
+    ]
+
+    async def fake_get(self, url, params=None):
+        request = httpx.Request("GET", url, params=params)
+        return httpx.Response(200, json=responses.pop(0), request=request)
+
+    monkeypatch.setenv("FX_UPSTREAM_BASE", "http://fake-upstream.local")
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    client = TestClient(app)
+    first = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "GBP", "date": "2026-08-28"},
+    )
+    second = client.get(
+        "/tools/convert",
+        params={"amount": "250", "from": "EUR", "to": "GBP", "date": "2026-08-28"},
+    )
+
+    assert_error(first, 400, "rate_not_available", "No exchange rate was available for that request.")
+    print_response("second_request_after_failed_payload", second)
+    assert second.status_code == 200
+    assert second.json()["rate"] == 0.85
+    assert second.json()["result"] == 212.5
+
+
 def test_weekend_uses_upstream_rate_date(monkeypatch):
     print("\nTEST: weekend request shows the actual upstream rate date")
 
@@ -180,6 +250,9 @@ def test_weekend_uses_upstream_rate_date(monkeypatch):
 
 
 def test_invalid_amount_returns_error_shape():
+    print("\nTEST: zero amount returns structured error")
+    print("GET /tools/convert?amount=0&from=EUR&to=TRY&date=2026-08-28")
+
     client = TestClient(app)
     response = client.get(
         "/tools/convert",
@@ -187,6 +260,45 @@ def test_invalid_amount_returns_error_shape():
     )
 
     assert_error(response, 400, "invalid_amount", "Amount must be greater than zero.")
+
+
+def test_negative_amount_returns_error_shape():
+    print("\nTEST: negative amount returns structured error")
+    print("GET /tools/convert?amount=-250&from=EUR&to=TRY&date=2026-08-28")
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "-250", "from": "EUR", "to": "TRY", "date": "2026-08-28"},
+    )
+
+    assert_error(response, 400, "invalid_amount", "Amount must be greater than zero.")
+
+
+def test_missing_amount_returns_bad_request():
+    print("\nTEST: missing amount returns structured bad request")
+    print("GET /tools/convert?from=EUR&to=TRY&date=2026-08-28")
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"from": "EUR", "to": "TRY", "date": "2026-08-28"},
+    )
+
+    assert_error(response, 422, "bad_request", "The request could not be processed.")
+
+
+def test_amount_with_ten_decimal_places_returns_error():
+    print("\nTEST: amount with ten decimal places returns structured error")
+    print("GET /tools/convert?amount=1.1234567890&from=EUR&to=TRY&date=2026-08-28")
+
+    client = TestClient(app)
+    response = client.get(
+        "/tools/convert",
+        params={"amount": "1.1234567890", "from": "EUR", "to": "TRY", "date": "2026-08-28"},
+    )
+
+    assert_error(response, 400, "amount_too_precise", "Amount must not have more than two decimal places.")
 
 
 def test_upstream_timeout_returns_error(monkeypatch):

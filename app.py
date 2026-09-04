@@ -44,6 +44,10 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": code, "message": message})
 
 
+def decimal_places(value: Decimal) -> int:
+    return max(0, -value.as_tuple().exponent)
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc: HTTPException) -> JSONResponse:
     if isinstance(exc.detail, dict) and "error" in exc.detail:
@@ -70,8 +74,14 @@ async def convert(
 
     if amount <= 0:
         return error_response(400, "invalid_amount", "Amount must be greater than zero.")
+    if decimal_places(amount) > 2:
+        return error_response(400, "amount_too_precise", "Amount must not have more than two decimal places.")
     if base not in SUPPORTED_CURRENCIES or target not in SUPPORTED_CURRENCIES:
         return error_response(400, "unknown_currency", "One or both requested currency codes are not supported.")
+    if asked_date > date.today():
+        return error_response(400, "date_in_future", "Date must not be in the future.")
+    if asked_date < SERIES_START:
+        return error_response(400, "date_before_series_start", "Date is before the exchange-rate series starts.")
     if base == target:
         return {
             "amount": float(amount),
@@ -83,10 +93,6 @@ async def convert(
             "asked_date": day,
             "source": SOURCE,
         }
-    if asked_date > date.today():
-        return error_response(400, "date_in_future", "Date must not be in the future.")
-    if asked_date < SERIES_START:
-        return error_response(400, "date_before_series_start", "Date is before the exchange-rate series starts.")
 
     if key in _cache:
         payload = _cache[key]
@@ -107,11 +113,12 @@ async def convert(
             return error_response(502, "upstream_bad_json", "The exchange-rate service returned invalid JSON.")
         except httpx.HTTPError:
             return error_response(502, "upstream_unavailable", "The exchange-rate service could not be reached.")
-        _cache[key] = payload
 
     rates = payload.get("rates", {})
     if target not in rates or "date" not in payload:
         return error_response(400, "rate_not_available", "No exchange rate was available for that request.")
+
+    _cache[key] = payload
 
     rate = Decimal(str(rates[target]))
     result = amount * rate
