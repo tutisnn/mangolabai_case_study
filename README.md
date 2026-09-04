@@ -89,7 +89,7 @@ Failure response:
 | `unknown_currency` | 400 | One or both currency codes are not supported. |
 | `date_in_future` | 400 | Requested date is in the future. |
 | `date_before_series_start` | 400 | Requested date is before `1999-01-04`. |
-| `rate_not_available` | 400 | Upstream returned no usable rate/date for the request. |
+| `rate_not_available` | 400 | Upstream returned no usable `rate` or `date` for the request. |
 | `bad_request` | 422 | Query parameters could not be parsed or validated. |
 | `upstream_error` | 502 | Upstream returned an HTTP error response. |
 | `upstream_bad_json` | 502 | Upstream response was not valid JSON. |

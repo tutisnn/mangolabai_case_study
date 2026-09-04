@@ -17,8 +17,8 @@ without the requested rate are not cached.
 ## With another day
 
 I would refresh the supported currency list from Frankfurter metadata at startup
-with a short-lived cache, and add more contract tests around exact upstream URL
-and query parameters.
+with a short-lived cache, and add integration smoke tests for the live
+Frankfurter API outside the offline test suite.
 
 ## AI tools
 

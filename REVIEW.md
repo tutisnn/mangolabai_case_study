@@ -7,10 +7,10 @@ and how you would verify it.
 
 ## 1.
 
-Exception'lar doğru HTTP hata cevabına çevrilmiyor.
+Exceptions are not converted into proper HTTP error responses.
 
-`convert` içinde bütün hatalar genel `except Exception` ile yakalanıyor ve hata
-olmasına rağmen normal conversion response'una benzeyen bir body dönülüyor:
+`convert` catches every error with a broad `except Exception` and returns a body
+that looks like a normal conversion response, even though the conversion failed:
 
 ```python
 except Exception as exc:
@@ -25,100 +25,97 @@ except Exception as exc:
     }
 ```
 
-Bu response `error` ve `message` içermiyor, ayrıca FastAPI bunu 200 gibi başarılı
-bir cevap olarak döndürebilir. Upstream timeout, 500, invalid JSON veya yanlış
-currency gibi durumlarda müşteri gerçek hata yerine `rate: 0.0` ve `result: 0.0`
-görebilir.
+This response does not include `error` or `message`, and FastAPI can return it
+as a successful 200 response. If the upstream times out, returns 500, returns
+invalid JSON, or rejects a currency, the customer may see `rate: 0.0` and
+`result: 0.0` instead of a real error.
 
-Müşteri etkisi: Bir AI agent bu cevabı gerçek dönüşüm sonucu sanıp müşteriye
-"250 EUR = 0 TRY" gibi tamamen yanlış bir finansal cevap verebilir. README'deki
-"wrong number is worse than no number" uyarısına en doğrudan aykırı durum bu.
+Customer impact: an AI agent could treat this as a real conversion result and
+tell a customer something like "250 EUR = 0 TRY". This directly violates the
+brief's warning that a wrong number is worse than no number.
 
-Nasıl doğrulardım: Frankfurter yerine fake upstream'i 500 dönecek, timeout
-atacak veya JSON olmayan body dönecek şekilde ayarlardım. Beklenen davranış
-non-2xx status ile `{ "error": "...", "message": "..." }` dönmesi olmalı; mevcut
-kodun başarılı görünümlü `rate: 0.0` cevabı döndürdüğünü kontrol ederdim.
+How I would verify it: I would run the service against a fake upstream that
+returns 500, times out, or returns non-JSON content. The expected behavior is a
+non-2xx response with `{ "error": "...", "message": "..." }`; I would check that
+the current code instead returns a successful-looking `rate: 0.0` response.
 
 ## 2.
 
-Cache istenen tarihi dikkate almıyor.
+The cache ignores the requested date.
 
-`tool.py` içinde cache anahtarı sadece para birimi çiftinden oluşuyor:
+In `tool.py`, the cache key only contains the currency pair:
 
 ```python
 key = f"{base}-{target}"
 ```
 
-Bu yüzden `EUR-TRY` için bir kur cache'e girdikten sonra, farklı tarihlerdeki
-`EUR-TRY` istekleri de aynı kuru kullanıyor.
+That means once a rate for `EUR-TRY` is cached, later `EUR-TRY` requests for
+different dates can reuse the same rate.
 
-Müşteri etkisi: Müşteri 2021 tarihli bir dönüşüm istediğinde servis 2026
-tarihinden cache'lenmiş kuru döndürebiliyor. Daha kötüsü, response içinde bu
-kurun `2021-09-01` tarihine ait olduğunu söylüyor. Bu sadece cache problemi
-değil; müşteriye yanlış finansal sonuç vermek demek.
+Customer impact: a customer asking for a 2021 conversion can receive a rate that
+was cached from 2026. Worse, the response can claim that the cached rate belongs
+to `2021-09-01`. This is not just a cache issue; it is a wrong financial answer
+for the customer.
 
-Nasıl doğruladım: `tool.py` servisini çalıştırıp aynı para birimi çifti için iki
-farklı tarih sordum:
+How I verified it: I started `tool.py` and called the same currency pair with
+two different dates:
 
 ```text
 /tools/convert?amount=250&from_=EUR&to=TRY&on=2026-09-01
 /tools/convert?amount=250&from_=EUR&to=TRY&on=2021-09-01
 ```
 
-İki cevapta da aynı kur döndü:
+Both responses returned the same rate:
 
 ```json
 "rate": 55.95
 ```
 
-Ama ikinci cevapta servis bu kuru şu tarihe aitmiş gibi gösterdi:
+But the second response presented that rate as if it belonged to this date:
 
 ```json
 "rate_date": "2021-09-01"
 ```
 
-Bu, README'deki "kur ait olmadığı bir tarihe aitmiş gibi gösterilmemeli"
-şartını ihlal ediyor.
+This violates the brief's requirement that the endpoint must not present a rate
+as belonging to a date it does not belong to.
 
 ## 3.
 
-Weekend/holiday tarihleri için `asked_date` ve `rate_date` ayrımı yapılmıyor.
+Weekend and holiday dates do not distinguish `asked_date` from `rate_date`.
 
-README'de `asked_date` caller'ın istediği tarih, `rate_date` ise kullanılan
-kurun gerçekten ait olduğu tarih olarak tanımlanıyor. `tool.py` response'unda
-`asked_date` alanı hiç yok ve `rate_date` değeri de upstream'in döndürdüğü
-gerçek `date` alanından değil, caller'ın istediği `on` parametresinden
-üretiliyor.
+The brief defines `asked_date` as the caller's requested date and `rate_date` as
+the date the used rate actually belongs to. `tool.py` does not return
+`asked_date`, and its `rate_date` is generated from the caller's `on` parameter
+instead of the upstream response's real `date` field.
 
-Müşteri etkisi: Müşteri 2026-08-30 gibi ECB'nin kur yayınlamadığı bir tarih
-istediğinde servis yine de başarılı cevap dönüyor ve `rate_date` alanında
-`2026-08-30` yazıyor. Bu, kullanılan kurun gerçekten o güne ait olduğu
-izlenimini verir. Bir AI agent bu cevabı müşteriye açıklarken yanlış tarihli
-finansal bilgi verebilir.
+Customer impact: if a customer asks for a date like `2026-08-30`, when the ECB
+did not publish a rate, the service can still return a successful response with
+`rate_date: "2026-08-30"`. That makes it look as if the rate really belongs to
+that day. An AI agent could then explain the conversion using the wrong date.
 
-Nasıl doğruladım: `tool.py` servisine şu isteği attım:
+How I verified it: I called `tool.py` with:
 
 ```text
 /tools/convert?amount=250&from_=EUR&to=TRY&on=2026-08-30
 ```
 
-Servis şu alanı döndürdü:
+The service returned:
 
 ```json
 "rate_date": "2026-08-30"
 ```
 
-Oysa 2026-08-30 Pazar günü olduğu için ECB o gün kur yayınlamaz. Servis
-upstream'in döndürdüğü gerçek `date` alanını okumalı, bunu `rate_date` olarak
-göstermeli ve caller'ın istediği tarihi ayrı bir `asked_date` alanında
-tutmalıydı.
+But `2026-08-30` was a Sunday, so the ECB would not have published a rate for
+that date. The service should read the upstream `date`, return it as
+`rate_date`, and keep the requested date separately as `asked_date`.
 
 ## 4.
 
-Gelecek veya olmayan tarihler `latest` kura düşüp geçerli cevap gibi görünebiliyor.
+Future or unavailable dates can fall back to `latest` and look valid.
 
-`fetch_rate` içinde hedef rate bulunamadığında kod bunu sadece weekend/holiday
-durumu gibi yorumlayıp `/latest` endpoint'ine fallback ediyor:
+In `fetch_rate`, when the target rate is missing, the code treats that as a
+weekend/holiday case and falls back to `/latest`:
 
 ```python
 if target not in payload.get("rates", {}):
@@ -126,82 +123,86 @@ if target not in payload.get("rates", {}):
     payload = response.json()
 ```
 
-Bu fallback çok geniş. Gelecek tarih, seri başlangıcından önceki tarih, yanlış
-currency veya bozuk upstream response'u gibi durumlar da aynı yola düşebilir.
+This fallback is too broad. Future dates, dates before the series starts,
+unsupported currencies, or malformed upstream responses can all fall into the
+same path.
 
-Müşteri etkisi: Müşteri `2090-01-01` gibi gelecekte ve kur yayınlanması mümkün
-olmayan bir tarih istediğinde servis bugünün/latest kurunu kullanıp başarılı
-cevap döndürebiliyor. Daha kötüsü, response'ta bu kurun `2090-01-01` tarihine
-ait olduğunu söylüyor.
+Customer impact: if a customer asks for a future date like `2090-01-01`, where
+an ECB rate cannot exist, the service can use today's/latest rate and return a
+successful response. Worse, it can say that the rate belongs to `2090-01-01`.
 
-Nasıl doğruladım: `tool.py` servisine şu isteği attım:
+How I verified it: I called:
 
 ```text
 /tools/convert?amount=250&from_=EUR&to=TRY&on=2090-01-01
 ```
 
-Servis şu cevabı döndürdü:
+The service returned:
 
 ```json
 {"amount":250.0,"from":"EUR","to":"TRY","rate":55.91,"result":13977.5,"rate_date":"2090-01-01","source":"ECB via frankfurter.dev"}
 ```
 
-Ardından güncel tarih için attığım istek de aynı kuru döndürdü:
+Then I called the current date:
 
 ```text
 /tools/convert?amount=250&from_=EUR&to=TRY&on=2026-09-02
 ```
 
+and got the same rate:
+
 ```json
 {"amount":250.0,"from":"EUR","to":"TRY","rate":55.91,"result":13977.5,"rate_date":"2026-09-02","source":"ECB via frankfurter.dev"}
 ```
 
-Bu, olmayan bir tarih için latest kurun kullanıldığını ve rate tarihinin yanlış
-sunulduğunu gösteriyor.
+This shows that `latest` can be used for an unavailable date, while the response
+presents the requested date as the rate date.
 
 ## 5.
 
-`FX_UPSTREAM_BASE` kullanılmıyor.
+`FX_UPSTREAM_BASE` is not used.
 
-`tool.py` içinde gerçek Frankfurter host'u hardcoded:
+`tool.py` hardcodes the real Frankfurter host:
 
 ```python
 UPSTREAM = "https://api.frankfurter.dev/v1"
 ```
 
-README ise upstream URL'nin `FX_UPSTREAM_BASE` environment variable'ından
-okunmasını istiyor. Reviewer fake upstream verdiğinde bu servis onu kullanamaz;
-test ortamı yerine her zaman gerçek host'a gitmeye çalışır.
+The README requires the upstream URL to come from the `FX_UPSTREAM_BASE`
+environment variable. When the reviewer points the service at a fake upstream,
+this implementation cannot use it and will still try to call the real host.
 
 ## 6.
 
-Kur erken yuvarlanıyor ve sonuç yuvarlanmış kurla hesaplanıyor.
+The rate is rounded too early, and the result is calculated from the rounded
+rate.
 
-`tool.py` içinde upstream'den gelen kur önce iki haneye yuvarlanıyor:
+`tool.py` rounds the upstream rate to two decimal places before calculating the
+result:
 
 ```python
 rate = round(rate, 2)
 result = round(amount * rate, 2)
 ```
 
-Bu, Frankfurter'ın daha hassas döndürdüğü kuru kaybettiriyor. Örneğin upstream
-`47.1234` döndürürse servis bunu `47.12` yapıyor ve sonucu da bu kırpılmış
-değerle hesaplıyor.
+This loses precision from Frankfurter's response. For example, if the upstream
+returns `47.1234`, the service changes it to `47.12` and calculates the result
+with that shortened value.
 
-Müşteri etkisi: Küçük tutarlarda fark az görünebilir, ama yüksek tutarlı
-dönüşümlerde iki ondalığa erken yuvarlama müşteriye yanlış finansal sonuç
-verebilir. Kur response'ta daha az hassas gösterilse bile hesaplama mümkün
-olduğunca upstream'den gelen gerçek rate ile yapılmalı.
+Customer impact: for small amounts the difference may look minor, but for large
+conversions, early rounding can produce the wrong financial result. Even if the
+displayed rate is rounded, the calculation should use the full upstream rate.
 
-Nasıl doğrulardım: Fake upstream ile `rate=47.1234` döndürüp `amount=250`
-isteği atardım. Doğru hesap `250 * 47.1234 = 11780.85` olmalı. Kod önce
-`47.12`'ye yuvarladığı için sonucu `11780.00` hesaplar.
+How I would verify it: I would use a fake upstream that returns `rate=47.1234`
+and request `amount=250`. The correct calculation is
+`250 * 47.1234 = 11780.85`. The current code rounds first to `47.12`, so it
+calculates `11780.00`.
 
 ## The one I would fix before shipping tonight
 
-İlk bulguyu düzeltirdim: exception'lar 200 görünümlü `rate: 0.0` cevabına
-çevrilmemeli, non-2xx status ile `{ "error": "...", "message": "..." }`
-dönmeliydi.
+I would fix the first finding: exceptions should not be converted into a
+successful-looking `rate: 0.0` response. They should return a non-2xx status
+with `{ "error": "...", "message": "..." }`.
 
 ## Things that look suspicious but are fine
 

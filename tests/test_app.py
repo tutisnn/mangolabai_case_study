@@ -110,10 +110,12 @@ def test_convert_uses_fake_upstream(monkeypatch):
 
     async def handler(request: httpx.Request) -> httpx.Response:
         calls.append(str(request.url))
-        assert str(request.url).startswith("http://fake-upstream.local/2026-08-28")
+        assert str(request.url).startswith("http://fake-upstream.local/v2/rate/EUR/TRY")
+        assert request.url.params["date"] == "2026-08-28"
+        assert request.url.params["providers"] == "ECB"
         return httpx.Response(
             200,
-            json={"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"TRY": 47.1234}},
+            json={"base": "EUR", "quote": "TRY", "date": "2026-08-28", "rate": 47.1234},
             request=request,
         )
 
@@ -159,7 +161,7 @@ def test_successful_conversion_is_cached(monkeypatch):
         calls.append(str(request.url))
         return httpx.Response(
             200,
-            json={"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"USD": 1.2}},
+            json={"base": "EUR", "quote": "USD", "date": "2026-08-28", "rate": 1.2},
             request=request,
         )
 
@@ -190,8 +192,8 @@ def test_failed_upstream_payload_is_not_cached(monkeypatch):
     print("GET /tools/convert?amount=250&from=EUR&to=GBP&date=2026-08-28")
 
     responses = [
-        {"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {}},
-        {"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"GBP": 0.85}},
+        {"base": "EUR", "quote": "GBP", "date": "2026-08-28"},
+        {"base": "EUR", "quote": "GBP", "date": "2026-08-28", "rate": 0.85},
     ]
 
     async def fake_get(self, url, params=None):
@@ -223,10 +225,12 @@ def test_weekend_uses_upstream_rate_date(monkeypatch):
 
     async def fake_get(self, url, params=None):
         request = httpx.Request("GET", url, params=params)
-        assert str(request.url).startswith("http://fake-upstream.local/2026-08-30")
+        assert str(request.url).startswith("http://fake-upstream.local/v2/rate/EUR/TRY")
+        assert request.url.params["date"] == "2026-08-30"
+        assert request.url.params["providers"] == "ECB"
         return httpx.Response(
             200,
-            json={"amount": 1.0, "base": "EUR", "date": "2026-08-28", "rates": {"TRY": 47.1234}},
+            json={"base": "EUR", "quote": "TRY", "date": "2026-08-28", "rate": 47.1234},
             request=request,
         )
 
@@ -397,7 +401,7 @@ def test_upstream_unavailable_returns_error(monkeypatch):
 def test_rate_not_available_returns_error(monkeypatch):
     async def fake_get(self, url, params=None):
         request = httpx.Request("GET", url, params=params)
-        return httpx.Response(200, json={"base": "EUR", "date": "2026-08-29", "rates": {}}, request=request)
+        return httpx.Response(200, json={"base": "EUR", "quote": "AUD", "date": "2026-08-29"}, request=request)
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
 

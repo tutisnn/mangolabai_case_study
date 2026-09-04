@@ -100,8 +100,8 @@ async def convert(
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(
-                    f"{upstream_base()}/{day}",
-                    params={"base": base, "symbols": target},
+                    f"{upstream_base()}/v2/rate/{base}/{target}",
+                    params={"date": day, "providers": "ECB"},
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -114,13 +114,12 @@ async def convert(
         except httpx.HTTPError:
             return error_response(502, "upstream_unavailable", "The exchange-rate service could not be reached.")
 
-    rates = payload.get("rates", {})
-    if target not in rates or "date" not in payload:
+    if "rate" not in payload or "date" not in payload:
         return error_response(400, "rate_not_available", "No exchange rate was available for that request.")
 
     _cache[key] = payload
 
-    rate = Decimal(str(rates[target]))
+    rate = Decimal(str(payload["rate"]))
     result = amount * rate
 
     return {
